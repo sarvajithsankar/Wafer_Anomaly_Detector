@@ -1,16 +1,15 @@
-# wafer-guard-audit
-
-My submission for the GDG Tech Wildcard Entry (AI/ML track). The task: take a PyTorch notebook that reports F1 >= 0.90 for detecting defective wafers, find out what's actually wrong with it, fix it, and report numbers I can stand behind.
+# Wafer_Anomaly_Detector
+The task: take a PyTorch notebook that reports F1 >= 0.90 for detecting defective wafers, find out what's actually wrong with it, fix it, and report numbers I can stand behind.
 
 The original notebook runs fine and clears its own release gate, but a notebook running without errors doesn't mean the result is valid. This repo has my audit of it, the repaired version, and the metrics measured at the real defect rate (about 6.6%).
 
-STATUS: <update this once the repair is done>
+STATUS: Introspecting the notebook
 
 ## What's in here
 
 - `wafer_guard_fixed.ipynb` - the repaired notebook
 - `AUDIT.md` - what I found, how I fixed it, and the final numbers
-- `wafer_guard_original.ipynb` - the untouched original, so the before/after comparison can be reproduced
+- `bnypi.ipynb` - the untouched original, so the before/after comparison can be reproduced
 
 I haven't included the dataset (`secom_telemetry_modified.csv`). It comes with the task brief, in the Drive folder linked there.
 
@@ -56,34 +55,4 @@ To run them: <command or cell name>
 
 It's a supervised autoencoder. An encoder squeezes the 590 sensors down to a small latent code, a decoder tries to rebuild the input from it, and a small head on the same code predicts defect or not. The loss adds reconstruction error (MSE) and classification error (BCE with logits). Training uses AdamW with a cosine schedule.
 
-<if the repair changes the architecture, say how here>
-
-## What I changed and why
-
-<fill this in from the final notebook: how the data is split, what's fit on training data only, how class imbalance is handled, how PS-L is handled, how the threshold was picked and on which split>
-
-The longer version, with evidence, is in [AUDIT.md](AUDIT.md).
-
-## Results
-
-<copy these straight from the notebook output, don't round or estimate>
-
-- Test set size:
-- Defect rate in test set:
-- Threshold:
-- Precision:
-- Recall:
-- F1:
-- PR-AUC:
-- ROC-AUC:
-- Confusion matrix: TN= FP= FN= TP=
-
-## Limitations
-
-<edit to match your final work>
-
-With only a few percent of lots failing, there just aren't many positive examples, so these numbers carry a lot of uncertainty. I also only used one train/test cut, so a different cut could give different results, and I haven't modelled drift after the training period.
-
-## Author
-
-<your name> - <github or email>
+sarvajith sankar - sarvajith2knot8@gmail.com
