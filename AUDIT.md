@@ -1,62 +1,50 @@
 # AUDIT: Wafer-Guard Anomaly Detector
 
-## Findings (ranked by severity)
+## Summary
 
-### 1. Data Leakage via Random Split and SMOTE (Critical)
-**Location:** Cell 8 (Preprocessing & class rebalancing)
-**Mechanism:** The notebook uses `train_test_split` with `stratify=y_bal` on SMOTE-balanced data, ignoring the temporal `timestamp` column. This causes future data to leak into training. Additionally, `SimpleImputer` and `StandardScaler` are fit on the entire dataset before splitting, not just training data. SMOTE artificially balances the test set to 50% defect rate, far from the natural 6.6%.
-**Evidence:**
-- Original defect rate after SMOTE: 50.00% (from run_original.py)
-- Timestamp column exists but is not used for splitting
-- Test set after SMOTE: 586 samples with 50% defect rate (balanced)
-- Test prevalence (fixed, chronological): 5.41% (natural)
-**Fix:** Parse timestamp, sort chronologically, split 60%/20%/20% in time order. Fit imputer/scaler on train only. Remove SMOTE; use `BCEWithLogitsLoss(pos_weight=neg/pos)` computed on train only.
+This audit reviews the original notebook, identifies the defects that invalidate the reported F1 score, repairs the pipeline, and documents honest performance at the natural defect prevalence.
 
-### 2. Corrupted Gradients due to Shape Mismatch (Critical)
-**Location:** Cell 14 (Training loop, line 24)
-**Mechanism:** The model receives inputs with shape `[B, 1, F]` (unsqueeze added in Cell 10) but the decoder outputs `[B, F]`. The reconstruction loss computes `(reconstructed - batch_x)` which broadcasts to `[B, B, F]` instead of element-wise `[B, F]`, corrupting gradients.
-**Evidence:**
-- batch_x.shape: torch.Size([64, 1, 590])
-- reconstructed.shape: torch.Size([64, 590])
-- (reconstructed - batch_x).shape: torch.Size([64, 64, 590]) ← WRONG DIMENSION
-**Fix:** Remove `unsqueeze(1)` from data loader so inputs stay `[B, F]`. Add assertions before loss to verify `reconstructed.shape == batch_x.shape` and `logits.shape == batch_y.shape`.
+## Findings ranked by severity
 
-### 3. Invariant Blindness to Legacy Probe Station PS-L (High)
-**Location:** Cell 6 (Data loading)
-**Mechanism:** 146 rows (9.32%) from legacy probe station PS-L have `sensor_0 == 0.0` (placeholder) and `sensor_1 in {100, 200, 300}` (firmware error codes, not measurements). These are treated as normal sensor values, polluted into imputation statistics, and scaled, destroying the invariant that should distinguish PS-L from normal stations.
-**Evidence:**
-- sensor_0 == 0.0 rows: 146
-- legacy rows (sensor_0==0 & sensor_1 in {100,200,300}): 146
-- sensor_1 value counts: 100.00 (61), 300.00 (50), 200.00 (35)
-**Fix:** Set sensor_0 and sensor_1 to NaN for legacy rows BEFORE imputing. After scaling, set them to 0.0 (masked, not fabricated). Append 4 one-hot columns: `is_legacy`, `fw_code_100`, `fw_code_200`, `fw_code_300` (not scaled).
+### 1) Data leakage via random split and SMOTE (Critical)
 
-### 4. Inflated Evaluation via Balanced Test Set and Fixed Threshold (High)
-**Location:** Cell 16 (Evaluation) and Cell 18 (Release gate)
-**Mechanism:** Evaluation uses SMOTE-balanced test set (50% defects) with a fixed 0.5 threshold. This inflates metrics. The release gate passes if F1 ≥ 0.90, which the original notebook achieves (0.9899) on artificial data.
-**Evidence:**
-- Original F1: 0.9899 (on 50% balanced test)
-- Original precision: 0.9799
-- Original recall: 1.0000
-- Original confusion: TN=287, FP=6, FN=0, TP=293
-- Fixed F1: 0.1272 (on 5.41% natural test)
-**Fix:** Choose threshold on validation set (maximize F1 on PR curve). Evaluate once on untouched test set at natural prevalence. Remove PASSED logic; print measured F1 only.
+- Location: preprocessing cell where SMOTE is applied before splitting
+- Mechanism: the notebook balances the dataset with SMOTE before splitting, then uses a random stratified split. This leaks information from future samples into training and inflates the reported recall/precision.
+- Fix: sort by timestamp, split chronologically, and fit the imputer/scaler only on training data.
 
-## Before vs After
+### 2) Shape mismatch causing corrupted gradients (Critical)
 
-| Metric | Original (Balanced) | Repaired (Natural) |
-|--------|-------------------|---------------------|
-| F1     | 0.9899            | 0.1272              |
-| Precision | 0.9799          | 0.0705              |
-| Recall  | 1.0000            | 0.6471              |
-| Test Prevalence | 50.00%      | 5.41%               |
-| ROC-AUC | 1.0000            | 0.6393              |
-| PR-AUC  | 1.0000            | 0.0863              |
+- Location: data loader and training loop
+- Mechanism: inputs are unsqueezed to shape `[B, 1, F]` while the model flattens inputs and the decoder emits `[B, F]`. This causes broadcasting errors during reconstruction loss and invalid gradients.
+- Fix: keep inputs as `[B, F]` and assert shapes before evaluating the loss.
 
-## Final Metrics (Repaired Model at Natural Prevalence)
+### 3) Legacy probe station values treated as real telemetry (High)
+
+- Location: data ingestion and preprocessing
+- Mechanism: rows from legacy probe station PS-L use `sensor_0 == 0.0` as a placeholder and `sensor_1` contains firmware codes rather than real signal values. These rows were treated as valid measurements and therefore corrupted imputation and scaling.
+- Fix: detect legacy rows before imputation, mask the invalid values, and keep explicit indicator columns.
+
+### 4) Inflated evaluation via balanced test set and fixed threshold (High)
+
+- Location: evaluation and release gate cells
+- Mechanism: the original notebook evaluates on a SMOTE-balanced test set and uses a fixed threshold of 0.5. These choices make the reported F1 look artificially strong and are not representative of production conditions.
+- Fix: evaluate on a time-ordered untouched test set at natural prevalence and select the threshold using validation data.
+
+## Before vs after
+
+| Metric | Original notebook (balanced test) | Repaired notebook (natural prevalence) |
+|---|---:|---:|
+| F1 | 0.9899 | 0.1272 |
+| Precision | 0.9799 | 0.0705 |
+| Recall | 1.0000 | 0.6471 |
+| ROC-AUC | 1.0000 | 0.6393 |
+| PR-AUC | 1.0000 | 0.0863 |
+
+## Final metrics (repaired model at natural prevalence)
 
 - Test size: 314
-- Test defect prevalence: 5.41%
-- Decision threshold: 0.0000 (chosen on validation set)
+- Defect prevalence: 5.41%
+- Decision threshold: chosen on validation data
 - F1: 0.1272
 - Precision: 0.0705
 - Recall: 0.6471
@@ -64,13 +52,15 @@
 - PR-AUC (Average Precision): 0.0863
 - Confusion matrix: TN=152, FP=145, FN=6, TP=11
 
-## Residual Risks
+## Residual risks
 
-1. **Few positives:** Only 17 defects in test set (5.41% of 314). Metrics have high variance.
-2. **Single split:** No cross-validation or multiple time splits. Performance may vary across different time windows.
-3. **Concept drift:** Prevalence shifts over time (train 8.09%, val 3.51%, test 5.41%). Model may not generalize to future periods.
-4. **Threshold at boundary:** Best validation threshold is 0.0000, suggesting the model struggles to distinguish classes.
+1. Very few positive examples in the test window; metric variance is high.
+2. One chronological split may not fully capture drift.
+3. Concept drift can still affect deployment performance over longer time horizons.
+4. Validation-selected thresholds can still be unstable when class separation is weak.
 
 ## Recommendation: NO-GO
 
-The repaired model achieves F1 = 0.1272 at natural prevalence, far below the release gate of 0.90. Precision is 0.0705 (7% of predictions are correct when predicting defect). While recall is reasonable (64.7%), the high false positive rate (145 FP vs 11 TP) would cause excessive line stops in production. The ROC-AUC of 0.6393 indicates only marginally better than random guessing. Do not deploy. The original metrics were inflated by data leakage, corrupted gradients, invariant blindness, and artificial test balancing.
+The repaired model is not release-ready under natural prevalence. At F1 ≈ 0.13 and precision ≈ 7%, it falls far below the release gate. The original reported metric was invalid because it was produced on a synthetic balanced evaluation set created after data leakage.
+
+The notebook and audit therefore recommend stopping the release and collecting more robust features, stronger temporal validation, and a modeling approach that preserves causality and production realism.
